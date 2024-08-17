@@ -1,80 +1,78 @@
-import RPi.GPIO as GPIO
 import time
+import RPi.GPIO as GPIO
 import requests
 
-# GPIO Mode (BOARD / BCM)
+# Set up GPIO mode
 GPIO.setmode(GPIO.BCM)
 
-# Set GPIO Pins
-GPIO_TRIGGER = 23
-GPIO_ECHO = 24
+# Define GPIO pins for the HC-SR04
+TRIGGER_PIN = 23
+ECHO_PIN = 24
 
-# Set GPIO direction (IN / OUT)
-GPIO.setup(GPIO_TRIGGER, GPIO.OUT)
-GPIO.setup(GPIO_ECHO, GPIO.IN)
+# Set up the trigger and echo pins
+GPIO.setup(TRIGGER_PIN, GPIO.OUT)
+GPIO.setup(ECHO_PIN, GPIO.IN)
 
-# Set the total height of the bin in cm
-bin_height = 50.0  # adjust this to the actual height of your bin
+# Bin dimensions
+BIN_HEIGHT_CM = 26.0  # Replace with the actual height of your bin in cm
 
-def distance():
-    # Set Trigger to HIGH
-    GPIO.output(GPIO_TRIGGER, True)
-
-    # Set Trigger after 0.01ms to LOW
+def get_distance():
+    # Send a pulse to the trigger pin
+    GPIO.output(TRIGGER_PIN, GPIO.LOW)
+    time.sleep(0.5)
+    GPIO.output(TRIGGER_PIN, GPIO.HIGH)
     time.sleep(0.00001)
-    GPIO.output(GPIO_TRIGGER, False)
+    GPIO.output(TRIGGER_PIN, GPIO.LOW)
 
-    StartTime = time.time()
-    StopTime = time.time()
+    # Wait for the echo pin to go high
+    while GPIO.input(ECHO_PIN) == GPIO.LOW:
+        pulse_start = time.time()
 
-    # Save StartTime
-    while GPIO.input(GPIO_ECHO) == 0:
-        StartTime = time.time()
+    while GPIO.input(ECHO_PIN) == GPIO.HIGH:
+        pulse_end = time.time()
 
-    # Save time of arrival
-    while GPIO.input(GPIO_ECHO) == 1:
-        StopTime = time.time()
+    # Calculate pulse duration
+    pulse_duration = pulse_end - pulse_start
 
-    # Time difference between start and arrival
-    TimeElapsed = StopTime - StartTime
-    # Multiply with the sonic speed (34300 cm/s)
-    # and divide by 2, because there and back
-    distance = (TimeElapsed * 34300) / 2
+    # Calculate distance in centimeters
+    distance = pulse_duration * 17150
+    distance = round(distance, 2)
 
     return distance
 
-def bin_level_percentage():
-    dist = distance()
-    # Calculate the distance from the top of the bin to the trash level
-    trash_level = bin_height - dist
-    # Calculate the percentage
-    percentage = (trash_level / bin_height) * 100
-    return max(0, min(100, percentage))  # Ensure the percentage is between 0 and 100
+def calculate_fill_level(distance):
+    # Calculate the filled portion of the bin
+    fill_level_cm = BIN_HEIGHT_CM - distance
 
-def send_data(level):
-    url = 'http://192.168.77.190:8000/api/receive-data'
-    headers = {'Content-Type': 'application/json'}
-    data = {'sensor_data': level}
-    
+    # Ensure fill level is within 0 to BIN_HEIGHT_CM
+    fill_level_cm = max(0, min(fill_level_cm, BIN_HEIGHT_CM))
+
+    # Calculate fill percentage
+    fill_percentage = (fill_level_cm / BIN_HEIGHT_CM) * 100
+    return int(fill_percentage)
+
+def send_data_to_server(fill_percentage):
+    url = "http://192.168.100.196:8000/api/bin-level"  # Replace with your Laravel API endpoint
+    headers = {"Content-Type": "application/json"}
+    data = {"fill_percentage": fill_percentage}
+
     try:
         response = requests.post(url, json=data, headers=headers)
         if response.status_code == 200:
-            print('Data sent successfully!')
+            print("Data sent successfully.")
         else:
-            print('Failed to send data:', response.status_code)
+            print(f"Failed to send data. Status code: {response.status_code}")
     except requests.RequestException as e:
-        print('Error sending data:', e)
+        print(f"Error sending data: {e}")
 
-if __name__ == '__main__':
-    try:
-        while True:
-            level = bin_level_percentage()
-            print(f"Bin Level: {level:.1f}%")
-            send_data(level)
-            time.sleep(60)  # Send data every 60 seconds
-
-    except KeyboardInterrupt:
-        print("Measurement stopped by User")
-        GPIO.cleanup()
-
-
+try:
+    while True:
+        distance = get_distance()
+        fill_percentage = calculate_fill_level(distance)
+        print(f"Bin fill level: {fill_percentage}%")
+        send_data_to_server(fill_percentage)
+        time.sleep(15)  
+except KeyboardInterrupt:
+    print("Program stopped.")
+finally:
+    GPIO.cleanup()
