@@ -16,6 +16,9 @@ GPIO.setup(ECHO_PIN, GPIO.IN)
 # Bin dimensions
 BIN_HEIGHT_CM = 26.0  # Replace with the actual height of your bin in cm
 
+# Notification flag
+notification_sent = False
+
 def get_distance():
     # Send a pulse to the trigger pin
     GPIO.output(TRIGGER_PIN, GPIO.LOW)
@@ -65,11 +68,21 @@ def send_data_to_server(fill_percentage):
     except requests.RequestException as e:
         print(f"Error sending data: {e}")
 
+def send_notification():
+    # Replace this with the code to send an actual notification (email, SMS, etc.)
+    print("Alert: The bin has reached 50% of its capacity!")
+
 try:
     while True:
         distance = get_distance()
         fill_percentage = calculate_fill_level(distance)
         print(f"Bin fill level: {fill_percentage}%")
+        
+        # Check if the bin is 50% or more filled and send a notification if it hasn't been sent yet
+        if fill_percentage >= 50 and not notification_sent:
+            send_notification()
+            notification_sent = True  # Ensure notification is sent only once
+
         send_data_to_server(fill_percentage)
         time.sleep(15)  
 except KeyboardInterrupt:
