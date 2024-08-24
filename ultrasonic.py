@@ -55,7 +55,7 @@ def calculate_fill_level(distance):
     return int(fill_percentage)
 
 def send_data_to_server(fill_percentage):
-    url = "http://192.168.100.196:8000/api/bin-level"  # Replace with your Laravel API endpoint
+    url = "http://:8000/api/bin-level"  # Replace with your Laravel API endpoint
     headers = {"Content-Type": "application/json"}
     data = {"fill_percentage": fill_percentage}
 
@@ -82,6 +82,10 @@ try:
         if fill_percentage >= 50 and not notification_sent:
             send_notification()
             notification_sent = True  # Ensure notification is sent only once
+        
+        # Reset notification if the bin is emptied
+        if fill_percentage == 0:
+            notification_sent = False  # Reset the notification flag
 
         send_data_to_server(fill_percentage)
         time.sleep(15)  
