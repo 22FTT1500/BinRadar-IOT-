@@ -4,6 +4,7 @@ import requests
 
 # Set up GPIO mode
 GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)  # Disable GPIO warnings
 
 # Define GPIO pins for the HC-SR04
 TRIGGER_PIN = 23
@@ -18,6 +19,11 @@ BIN_HEIGHT_CM = 26.0  # Replace with the actual height of your bin in cm
 
 # Notification flag
 notification_sent = False
+
+# Laravel API credentials and URL
+API_URL = "http://192.168.100.196:8000/api"
+BIN_ENDPOINT = f"{API_URL}/bins/3"
+TOKEN = "5dbd75897c5ae6bb7e56bd2810b5d959fcf4946b63726586000820ddd5a730b8"  # Replace with your actual token
 
 def get_distance():
     # Send a pulse to the trigger pin
@@ -54,9 +60,12 @@ def calculate_fill_level(distance):
     fill_percentage = (fill_level_cm / BIN_HEIGHT_CM) * 100
     return int(fill_percentage)
 
-def send_data_to_server(fill_percentage):
-    url = "http://:8000/api/bin-level"  # Replace with your Laravel API endpoint
-    headers = {"Content-Type": "application/json"}
+def send_data_to_server(fill_percentage, token):
+    url = BIN_ENDPOINT
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}"
+    }
     data = {"fill_percentage": fill_percentage}
 
     try:
@@ -72,24 +81,30 @@ def send_notification():
     # Replace this with the code to send an actual notification (email, SMS, etc.)
     print("Alert: The bin has reached 50% of its capacity!")
 
-try:
-    while True:
-        distance = get_distance()
-        fill_percentage = calculate_fill_level(distance)
-        print(f"Bin fill level: {fill_percentage}%")
-        
-        # Check if the bin is 50% or more filled and send a notification if it hasn't been sent yet
-        if fill_percentage >= 50 and not notification_sent:
-            send_notification()
-            notification_sent = True  # Ensure notification is sent only once
-        
-        # Reset notification if the bin is emptied
-        if fill_percentage == 0:
-            notification_sent = False  # Reset the notification flag
+def main():
+    global notification_sent  # Declare notification_sent as global
 
-        send_data_to_server(fill_percentage)
-        time.sleep(15)  
-except KeyboardInterrupt:
-    print("Program stopped.")
-finally:
-    GPIO.cleanup()
+    try:
+        while True:
+            distance = get_distance()
+            fill_percentage = calculate_fill_level(distance)
+            print(f"Bin fill level: {fill_percentage}%")
+            
+            # Check if the bin is 50% or more filled and send a notification if it hasn't been sent yet
+            if fill_percentage >= 50 and not notification_sent:
+                send_notification()
+                notification_sent = True  # Ensure notification is sent only once
+            
+            # Reset notification if the bin is emptied
+            if fill_percentage == 0:
+                notification_sent = False  # Reset the notification flag
+
+            send_data_to_server(fill_percentage, TOKEN)
+            time.sleep(15)
+    except KeyboardInterrupt:
+        print("Program stopped.")
+    finally:
+        GPIO.cleanup()
+
+if __name__ == "__main__":
+    main()
