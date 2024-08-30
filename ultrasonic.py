@@ -22,8 +22,8 @@ notification_sent = False
 
 # Laravel API credentials and URL
 API_URL = "http://192.168.100.196:8000/api"
-BIN_ENDPOINT = f"{API_URL}/bins/3"
-TOKEN = "5dbd75897c5ae6bb7e56bd2810b5d959fcf4946b63726586000820ddd5a730b8"  # Replace with your actual token
+BIN_ENDPOINT = f"{API_URL}/bins/3"  # Update with your actual bin ID
+TOKEN = "esVpFFayCTx3sVEDPREpTveZoQeCB38R12eXk8Lb511df200"  # Replace with your actual token
 
 def get_distance():
     # Send a pulse to the trigger pin
@@ -74,6 +74,7 @@ def send_data_to_server(fill_percentage, token):
             print("Data sent successfully.")
         else:
             print(f"Failed to send data. Status code: {response.status_code}")
+            print(f"Response Content: {response.text}")
     except requests.RequestException as e:
         print(f"Error sending data: {e}")
 
@@ -100,7 +101,7 @@ def main():
                 notification_sent = False  # Reset the notification flag
 
             send_data_to_server(fill_percentage, TOKEN)
-            time.sleep(15)
+            time.sleep(15)  # Adjust the delay as needed
     except KeyboardInterrupt:
         print("Program stopped.")
     finally:
