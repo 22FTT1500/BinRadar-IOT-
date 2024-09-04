@@ -23,31 +23,38 @@ notification_sent = False
 # Laravel API credentials and URL
 API_URL = "http://192.168.100.196:8000/api"
 BIN_ENDPOINT = f"{API_URL}/bins/3"  # Update with your actual bin ID
-TOKEN = "esVpFFayCTx3sVEDPREpTveZoQeCB38R12eXk8Lb511df200"  # Replace with your actual token
+TOKEN = "uN3yfpL9wN37PZEJOl7ThnHAS8Hup5SFqL36CYP3e4ea2bec"  # Replace with your actual token
 
-def get_distance():
-    # Send a pulse to the trigger pin
-    GPIO.output(TRIGGER_PIN, GPIO.LOW)
-    time.sleep(0.5)
-    GPIO.output(TRIGGER_PIN, GPIO.HIGH)
-    time.sleep(0.00001)
-    GPIO.output(TRIGGER_PIN, GPIO.LOW)
+def get_distance(retries=5):
+    for _ in range(retries):
+        # Send a pulse to the trigger pin
+        GPIO.output(TRIGGER_PIN, GPIO.LOW)
+        time.sleep(0.5)
+        GPIO.output(TRIGGER_PIN, GPIO.HIGH)
+        time.sleep(0.00001)
+        GPIO.output(TRIGGER_PIN, GPIO.LOW)
 
-    # Wait for the echo pin to go high
-    while GPIO.input(ECHO_PIN) == GPIO.LOW:
+        # Wait for the echo pin to go high
         pulse_start = time.time()
+        while GPIO.input(ECHO_PIN) == GPIO.LOW:
+            pulse_start = time.time()
 
-    while GPIO.input(ECHO_PIN) == GPIO.HIGH:
         pulse_end = time.time()
+        while GPIO.input(ECHO_PIN) == GPIO.HIGH:
+            pulse_end = time.time()
 
-    # Calculate pulse duration
-    pulse_duration = pulse_end - pulse_start
+        # Calculate pulse duration
+        pulse_duration = pulse_end - pulse_start
 
-    # Calculate distance in centimeters
-    distance = pulse_duration * 17150
-    distance = round(distance, 2)
+        # Calculate distance in centimeters
+        distance = pulse_duration * 17150
+        distance = round(distance, 2)
 
-    return distance
+        # Validate distance (within a reasonable range for your bin)
+        if 2 < distance < BIN_HEIGHT_CM:
+            return distance
+        time.sleep(0.1)
+    return BIN_HEIGHT_CM  # Return maximum bin height if sensor fails
 
 def calculate_fill_level(distance):
     # Calculate the filled portion of the bin
@@ -84,23 +91,28 @@ def send_notification():
 
 def main():
     global notification_sent  # Declare notification_sent as global
+    last_fill_percentage = None  # To track the previous fill percentage
 
     try:
         while True:
             distance = get_distance()
             fill_percentage = calculate_fill_level(distance)
             print(f"Bin fill level: {fill_percentage}%")
-            
+
+            # Only send data if fill percentage changes significantly
+            if last_fill_percentage is None or abs(last_fill_percentage - fill_percentage) >= 2:
+                send_data_to_server(fill_percentage, TOKEN)
+                last_fill_percentage = fill_percentage
+
             # Check if the bin is 50% or more filled and send a notification if it hasn't been sent yet
             if fill_percentage >= 50 and not notification_sent:
                 send_notification()
                 notification_sent = True  # Ensure notification is sent only once
             
-            # Reset notification if the bin is emptied
-            if fill_percentage == 0:
+            # Reset notification if the bin is emptied below 50%
+            if fill_percentage < 50:
                 notification_sent = False  # Reset the notification flag
 
-            send_data_to_server(fill_percentage, TOKEN)
             time.sleep(15)  # Adjust the delay as needed
     except KeyboardInterrupt:
         print("Program stopped.")
