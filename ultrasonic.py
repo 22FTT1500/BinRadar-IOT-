@@ -23,6 +23,7 @@ notification_sent = False
 # Laravel API credentials and URL
 API_URL = "http://192.168.100.196:8000/api"
 BIN_ENDPOINT = f"{API_URL}/bins/3"  # Update with your actual bin ID
+NOTIFICATION_ENDPOINT = f"{API_URL}/notifications"
 TOKEN = "uN3yfpL9wN37PZEJOl7ThnHAS8Hup5SFqL36CYP3e4ea2bec"  # Replace with your actual token
 
 def get_distance(retries=5):
@@ -85,9 +86,25 @@ def send_data_to_server(fill_percentage, token):
     except requests.RequestException as e:
         print(f"Error sending data: {e}")
 
-def send_notification():
-    # Replace this with the code to send an actual notification (email, SMS, etc.)
-    print("Alert: The bin has reached 50% of its capacity!")
+def send_notification(message):
+    url = NOTIFICATION_ENDPOINT
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {TOKEN}"
+    }
+    data = {
+        "message": message,
+        "type": "alert"
+    }
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_code == 200:
+            print(f"Notification sent successfully.")
+        else:
+            print(f"Failed to send notification. Status code: {response.status_code}")
+            print(f"Response Content: {response.text}")
+    except requests.RequestException as e:
+        print(f"Error sending notification: {e}")
 
 def main():
     global notification_sent  # Declare notification_sent as global
@@ -106,10 +123,12 @@ def main():
 
             # Check if the bin is 50% or more filled and send a notification if it hasn't been sent yet
             if fill_percentage >= 50 and not notification_sent:
-                send_notification()
+                message = f"Alert: The bin has reached {fill_percentage}% of its capacity!"
+                print(message)  # Print the alert message before sending the notification
+                send_notification(message)
                 notification_sent = True  # Ensure notification is sent only once
-            
-            # Reset notification if the bin is emptied below 50%
+
+            # Check if the bin is emptied below 50% to reset the notification flag
             if fill_percentage < 50:
                 notification_sent = False  # Reset the notification flag
 
@@ -121,3 +140,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
