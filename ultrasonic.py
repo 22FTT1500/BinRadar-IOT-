@@ -1,6 +1,7 @@
 import time
 import RPi.GPIO as GPIO
 import requests
+import os
 
 # Set up GPIO mode
 GPIO.setmode(GPIO.BCM)
@@ -20,11 +21,14 @@ BIN_HEIGHT_CM = 26.0  # Replace with the actual height of your bin in cm
 # Notification flag
 notification_sent = False
 
+# Bin id 
+BIN_ID = 1 # Update with your actual bin ID
+
 # Laravel API credentials and URL
-API_URL = "http://192.168.100.196:8000/api"
-BIN_ENDPOINT = f"{API_URL}/bins/3"  # Update with your actual bin ID
+API_URL = "http://192.168.100.196:8000/api" #Update with your actual IP Address
+BIN_ENDPOINT = f"{API_URL}/bins/{BIN_ID}"  # Update with your actual bin ID
 NOTIFICATION_ENDPOINT = f"{API_URL}/notifications"
-TOKEN = "uN3yfpL9wN37PZEJOl7ThnHAS8Hup5SFqL36CYP3e4ea2bec"  # Replace with your actual token
+TOKEN = os.getenv("API_TOKEN", "f3YBgU7j71eC8U2CadwMLOMmwMdVi0hR7nerEAPgcc5bd95d")  # Load from environment
 
 def get_distance(retries=5):
     for _ in range(retries):
@@ -86,25 +90,29 @@ def send_data_to_server(fill_percentage, token):
     except requests.RequestException as e:
         print(f"Error sending data: {e}")
 
-def send_notification(message):
+def send_notification(fill_percentage, token):
     url = NOTIFICATION_ENDPOINT
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {TOKEN}"
+        "Authorization": f"Bearer {token}"
     }
+    message = f"{fill_percentage}%"
+
     data = {
         "message": message,
-        "type": "alert"
+        "type": "alert",
+        "bin_id": BIN_ID
     }
     try:
         response = requests.post(url, json=data, headers=headers)
         if response.status_code == 200:
-            print(f"Notification sent successfully.")
+            print("Notification sent successfully.")
         else:
             print(f"Failed to send notification. Status code: {response.status_code}")
             print(f"Response Content: {response.text}")
     except requests.RequestException as e:
         print(f"Error sending notification: {e}")
+
 
 def main():
     global notification_sent  # Declare notification_sent as global
@@ -125,14 +133,15 @@ def main():
             if fill_percentage >= 50 and not notification_sent:
                 message = f"Alert: The bin has reached {fill_percentage}% of its capacity!"
                 print(message)  # Print the alert message before sending the notification
-                send_notification(message)
+                send_notification(fill_percentage, TOKEN)
                 notification_sent = True  # Ensure notification is sent only once
 
             # Check if the bin is emptied below 50% to reset the notification flag
             if fill_percentage < 50:
                 notification_sent = False  # Reset the notification flag
+                print(f"Notification flag reset. Current fill level: {fill_percentage}%")
 
-            time.sleep(15)  # Adjust the delay as needed
+            time.sleep(30)  # Adjust the delay as needed (increased to 30s for better efficiency)
     except KeyboardInterrupt:
         print("Program stopped.")
     finally:
@@ -140,4 +149,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
