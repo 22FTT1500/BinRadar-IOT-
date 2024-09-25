@@ -23,9 +23,11 @@ BIN_ID = 123  # Update with your actual bin ID
 API_URL = "http://binradar-laravel:8000/api"
 BIN_ENDPOINT = f"{API_URL}/bins/{BIN_ID}" 
 NOTIFICATION_ENDPOINT = f"{API_URL}/notifications"
+EMAIL_ENDPOINT = f"{API_URL}/send-email-notification"  # Email endpoint
 TOKEN = os.getenv("API_TOKEN", "E0kxzho0BW96KcBXRMIoB5q6DAoYpJwgT7AI3xJz3e6103c1")
 
 notification_sent = False
+email_sent = False  # Track email notification status separately
 
 def get_distance(retries=5):
     for _ in range(retries):
@@ -78,13 +80,11 @@ def send_notification(fill_percentage, token):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}"
     }
-    message = f"{fill_percentage}%"
-
     data = {
-        "message": message,
-        "type": "alert",
-        "bin_id": BIN_ID
+        "bin_id": BIN_ID,
+        "fill_percentage": fill_percentage,
     }
+
     try:
         response = requests.post(url, json=data, headers=headers)
         response.raise_for_status()  # Raise an error for bad responses
@@ -92,8 +92,26 @@ def send_notification(fill_percentage, token):
     except requests.RequestException as e:
         print(f"Error sending notification: {e}")
 
+def send_email_notification(BIN_ID, fill_percentage, TOKEN):
+    url = EMAIL_ENDPOINT
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {TOKEN}"
+    }
+    data = {
+        "bin_id": BIN_ID,
+        "fill_percentage": fill_percentage
+    }
+
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        response.raise_for_status()  # Raises exception for HTTP errors
+        print("Email notification sent successfully.")
+    except requests.RequestException as e:
+        print(f"Error sending email notification: {e}")
+
 def main():
-    global notification_sent
+    global notification_sent, email_sent
     last_fill_percentage = None
 
     try:
@@ -106,15 +124,23 @@ def main():
                 send_data_to_server(fill_percentage, TOKEN)
                 last_fill_percentage = fill_percentage
 
+            # Trigger in-app notification if bin level exceeds 50%
             if fill_percentage >= 50 and not notification_sent:
-                message = f"Alert: The bin has reached {fill_percentage}% of its capacity!"
-                print(message)
+                print(f"Alert: The bin has reached {fill_percentage}% of its capacity!")
                 send_notification(fill_percentage, TOKEN)
                 notification_sent = True
 
+            # Trigger email notification after the in-app notification
+            if fill_percentage >= 50 and not email_sent:
+                print(f"Triggering email notification for fill level: {fill_percentage}%")  # Debug line
+                send_email_notification(BIN_ID, fill_percentage, TOKEN)
+                email_sent = True
+
+            # Reset notification flags if bin level falls below 50%
             if fill_percentage < 50:
                 notification_sent = False
-                print(f"Notification flag reset. Current fill level: {fill_percentage}%")
+                email_sent = False
+                print(f"Notification flags reset. Current fill level: {fill_percentage}%")
 
             time.sleep(5)  # Adjust delay as needed
     except KeyboardInterrupt:
