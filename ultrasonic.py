@@ -2,10 +2,11 @@ import time
 import RPi.GPIO as GPIO
 import requests
 import os
+import random
 
 # Set up GPIO mode
 GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
+GPIO.setwarnings(False)  # Disable GPIO warnings
 
 # Define GPIO pins for the HC-SR04
 TRIGGER_PIN = 23
@@ -15,52 +16,79 @@ ECHO_PIN = 24
 GPIO.setup(TRIGGER_PIN, GPIO.OUT)
 GPIO.setup(ECHO_PIN, GPIO.IN)
 
-# Bin dimensions
-BIN_HEIGHT_CM = 26.0
-BIN_ID = 123  # Update with your actual bin ID
+# Bin configurations (real bin and dummy bins)
+bins = [
+    {"id": 123, "height": 26.0, "is_real": True},  # Real bin with sensor
+    #{"id": 456, "height": 36.0, "is_real": False},  # Dummy bin 1
+    #{"id": 789, "height": 46.0, "is_real": False},  # Dummy bin 2
+    #{"id": 101, "height": 25.0, "is_real": False},  # Dummy bin 3
+    #{"id": 202, "height": 40.0, "is_real": False},  # Dummy bin 4
+    #{"id": 303, "height": 50.0, "is_real": False}   # Dummy bin 5
+]
+
+# Notification flags for each bin
+notifications_sent = {bin_data['id']: False for bin_data in bins}
+last_fill_percentage = {bin_data['id']: None for bin_data in bins}
 
 # Laravel API credentials and URL
 API_URL = "http://binradar-laravel:8000/api"
-BIN_ENDPOINT = f"{API_URL}/bins/{BIN_ID}" 
-NOTIFICATION_ENDPOINT = f"{API_URL}/notifications"
-EMAIL_ENDPOINT = f"{API_URL}/send-email-notification"  # Email endpoint
-TOKEN = os.getenv("API_TOKEN", "E0kxzho0BW96KcBXRMIoB5q6DAoYpJwgT7AI3xJz3e6103c1")
+TOKEN = os.getenv("API_TOKEN", "TPjnqafyEQB9adawJrF18jugzH6n4ZyoYkYsOOdy8a84107f")  # Admin token
 
-notification_sent = False
-email_sent = False  # Track email notification status separately
+def get_distance(bin_height, retries=5, is_real=True):
+    if is_real:
+        for _ in range(retries):
+            try:
+                # Send a pulse to the trigger pin
+                GPIO.output(TRIGGER_PIN, GPIO.LOW)
+                time.sleep(0.5)
+                GPIO.output(TRIGGER_PIN, GPIO.HIGH)
+                time.sleep(0.00001)
+                GPIO.output(TRIGGER_PIN, GPIO.LOW)
 
-def get_distance(retries=5):
-    for _ in range(retries):
-        GPIO.output(TRIGGER_PIN, GPIO.LOW)
-        time.sleep(0.5)
-        GPIO.output(TRIGGER_PIN, GPIO.HIGH)
-        time.sleep(0.00001)
-        GPIO.output(TRIGGER_PIN, GPIO.LOW)
+                # Wait for the echo pin to go high
+                pulse_start = time.time()
+                timeout_start = pulse_start
+                while GPIO.input(ECHO_PIN) == GPIO.LOW:
+                    pulse_start = time.time()
+                    if pulse_start - timeout_start > 2:  # Timeout after 2 seconds
+                        raise Exception("No response from sensor (potential wiring issue).")
 
-        pulse_start = time.time()
-        while GPIO.input(ECHO_PIN) == GPIO.LOW:
-            pulse_start = time.time()
-        pulse_end = time.time()
-        while GPIO.input(ECHO_PIN) == GPIO.HIGH:
-            pulse_end = time.time()
+                pulse_end = time.time()
+                while GPIO.input(ECHO_PIN) == GPIO.HIGH:
+                    pulse_end = time.time()
 
-        pulse_duration = pulse_end - pulse_start
-        distance = pulse_duration * 17150
-        distance = round(distance, 2)
+                # Calculate pulse duration
+                pulse_duration = pulse_end - pulse_start
 
-        if 2 < distance < BIN_HEIGHT_CM:
-            return distance
-        time.sleep(0.1)
-    return BIN_HEIGHT_CM  # Default to max height
+                # Calculate distance in centimeters
+                distance = pulse_duration * 17150
+                distance = round(distance, 2)
 
-def calculate_fill_level(distance):
-    fill_level_cm = BIN_HEIGHT_CM - distance
-    fill_level_cm = max(0, min(fill_level_cm, BIN_HEIGHT_CM))
-    fill_percentage = (fill_level_cm / BIN_HEIGHT_CM) * 100
+                # Validate distance (within a reasonable range for your bin)
+                if 2 < distance < bin_height:
+                    return distance
+                time.sleep(0.1)
+            except Exception as e:
+                print(f"Error: {e}")
+                return None  # Return None if sensor fails multiple times
+        return bin_height  # Return maximum bin height if sensor fails
+    else:
+        # Simulate distance for dummy bins
+        return round(random.uniform(0, bin_height), 2)
+
+def calculate_fill_level(distance, bin_height):
+    # Calculate the filled portion of the bin
+    fill_level_cm = bin_height - distance
+
+    # Ensure fill level is within 0 to bin_height
+    fill_level_cm = max(0, min(fill_level_cm, bin_height))
+
+    # Calculate fill percentage
+    fill_percentage = (fill_level_cm / bin_height) * 100
     return int(fill_percentage)
 
-def send_data_to_server(fill_percentage, token):
-    url = BIN_ENDPOINT
+def send_data_to_server(bin_id, fill_percentage, token):
+    url = f"{API_URL}/bins/{bin_id}"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}"
@@ -69,80 +97,72 @@ def send_data_to_server(fill_percentage, token):
 
     try:
         response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()  # Raise an error for bad responses
-        print("Data sent successfully.")
+        if response.status_code == 200:
+            print(f"Data sent successfully for bin {bin_id}.")
+        else:
+            print(f"Failed to send data for bin {bin_id}. Status code: {response.status_code}")
+            print(f"Response Content: {response.text}")
     except requests.RequestException as e:
-        print(f"Error sending data: {e}")
+        print(f"Error sending data for bin {bin_id}: {e}")
 
-def send_notification(fill_percentage, token):
-    url = NOTIFICATION_ENDPOINT
+def send_notification(bin_id, message, token, notification_type="alert"):
+    url = f"{API_URL}/notifications"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}"
     }
-    data = {
-        "bin_id": BIN_ID,
-        "fill_percentage": fill_percentage,
-    }
 
+    data = {
+        "message": message,
+        "type": notification_type,  # Use "alert" for bin level, "error" for wiring issues
+        "bin_id": bin_id
+    }
     try:
         response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()  # Raise an error for bad responses
-        print("Notification sent successfully.")
+        print(f"Sending {notification_type} notification for bin {bin_id}: {data}")
+        if response.status_code == 200:
+            print(f"{notification_type.capitalize()} notification sent successfully for bin {bin_id}.")
+        else:
+            print(f"Failed to send {notification_type} notification for bin {bin_id}. Status code: {response.status_code}")
+            print(f"Response Content: {response.text}")
     except requests.RequestException as e:
-        print(f"Error sending notification: {e}")
-
-def send_email_notification(BIN_ID, fill_percentage, TOKEN):
-    url = EMAIL_ENDPOINT
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {TOKEN}"
-    }
-    data = {
-        "bin_id": BIN_ID,
-        "fill_percentage": fill_percentage
-    }
-
-    try:
-        response = requests.post(url, json=data, headers=headers)
-        response.raise_for_status()  # Raises exception for HTTP errors
-        print("Email notification sent successfully.")
-    except requests.RequestException as e:
-        print(f"Error sending email notification: {e}")
+        print(f"Error sending {notification_type} notification for bin {bin_id}: {e}")
 
 def main():
-    global notification_sent, email_sent
-    last_fill_percentage = None
-
     try:
         while True:
-            distance = get_distance()
-            fill_percentage = calculate_fill_level(distance)
-            print(f"Bin fill level: {fill_percentage}%")
+            for bin_data in bins:
+                bin_id = bin_data["id"]
+                bin_height = bin_data["height"]
+                is_real = bin_data["is_real"]
 
-            if last_fill_percentage is None or abs(last_fill_percentage - fill_percentage) >= 2:
-                send_data_to_server(fill_percentage, TOKEN)
-                last_fill_percentage = fill_percentage
+                distance = get_distance(bin_height, is_real=is_real)
 
-            # Trigger in-app notification if bin level exceeds 50%
-            if fill_percentage >= 50 and not notification_sent:
-                print(f"Alert: The bin has reached {fill_percentage}% of its capacity!")
-                send_notification(fill_percentage, TOKEN)
-                notification_sent = True
+                # If distance is None, it indicates a sensor/wiring issue
+                if distance is None:
+                    print(f"Warning: Potential wiring issue detected for bin {bin_id}.")
+                    send_notification(bin_id, "sensor or wiring issue", TOKEN, notification_type="error")
+                    continue  # Skip further processing for this bin until the issue is resolved
 
-            # Trigger email notification after the in-app notification
-            if fill_percentage >= 50 and not email_sent:
-                print(f"Triggering email notification for fill level: {fill_percentage}%")  # Debug line
-                send_email_notification(BIN_ID, fill_percentage, TOKEN)
-                email_sent = True
+                fill_percentage = calculate_fill_level(distance, bin_height)
+                print(f"Bin {bin_id} fill level: {fill_percentage}%")
 
-            # Reset notification flags if bin level falls below 50%
-            if fill_percentage < 50:
-                notification_sent = False
-                email_sent = False
-                print(f"Notification flags reset. Current fill level: {fill_percentage}%")
+                # Only send data if fill percentage changes significantly
+                if last_fill_percentage[bin_id] is None or abs(last_fill_percentage[bin_id] - fill_percentage) >= 2:
+                    send_data_to_server(bin_id, fill_percentage, TOKEN)
+                    last_fill_percentage[bin_id] = fill_percentage
 
-            time.sleep(5)  # Adjust delay as needed
+                # Check if the bin is 80% or more filled and send a notification if it hasn't been sent yet
+                if fill_percentage >= 80 and not notifications_sent[bin_id]:
+                    print(f"Alert: Bin {bin_id} has reached {fill_percentage}% of its capacity!")
+                    send_notification(bin_id, f"{fill_percentage}% full", TOKEN, notification_type="alert")
+                    notifications_sent[bin_id] = True  # Ensure notification is sent only once
+
+                # Check if the bin is emptied below 80% to reset the notification flag
+                if fill_percentage < 80:
+                    notifications_sent[bin_id] = False  # Reset the notification flag
+
+            time.sleep(20)  # Adjust the delay as needed
     except KeyboardInterrupt:
         print("Program stopped.")
     finally:
