@@ -27,12 +27,12 @@ bins = [
 ]
 
 # Notification flags for each bin
-notifications_sent = {bin_data['id']: False for bin_data in bins}
+notifications_sent = {bin_data['id']: {'error': False, 'recovered': False} for bin_data in bins}
 last_fill_percentage = {bin_data['id']: None for bin_data in bins}
 
 # Laravel API credentials and URL
 API_URL = "http://binradar-laravel:8000/api"
-TOKEN = os.getenv("API_TOKEN", "TPjnqafyEQB9adawJrF18jugzH6n4ZyoYkYsOOdy8a84107f")  # Admin token
+TOKEN = os.getenv("API_TOKEN", "BExMFlUC0tm5ork88WaZRECxI0fnsFSoxaUnI5JI674fae11")  # Admin token
 
 def get_distance(bin_height, retries=5, is_real=True):
     if is_real:
@@ -100,12 +100,12 @@ def send_data_to_server(bin_id, fill_percentage, token):
         if response.status_code == 200:
             print(f"Data sent successfully for bin {bin_id}.")
         else:
-            print(f"Failed to send data for bin {bin_id}. Status code: {response.status_code}")
+            print(f"FAILED to send data for bin {bin_id}. Status code: {response.status_code}")
             print(f"Response Content: {response.text}")
     except requests.RequestException as e:
         print(f"Error sending data for bin {bin_id}: {e}")
 
-def send_notification(bin_id, message, token, notification_type="alert"):
+def send_notification(bin_id, message, token, notification_type):
     url = f"{API_URL}/notifications"
     headers = {
         "Content-Type": "application/json",
@@ -121,9 +121,9 @@ def send_notification(bin_id, message, token, notification_type="alert"):
         response = requests.post(url, json=data, headers=headers)
         print(f"Sending {notification_type} notification for bin {bin_id}: {data}")
         if response.status_code == 200:
-            print(f"{notification_type.capitalize()} notification sent successfully for bin {bin_id}.")
+            print(f"SUCCESSFUL to send {notification_type} notification for bin {bin_id}.")
         else:
-            print(f"Failed to send {notification_type} notification for bin {bin_id}. Status code: {response.status_code}")
+            print(f"FAILED to send {notification_type} notification for bin {bin_id}. Status code: {response.status_code}")
             print(f"Response Content: {response.text}")
     except requests.RequestException as e:
         print(f"Error sending {notification_type} notification for bin {bin_id}: {e}")
@@ -138,29 +138,36 @@ def main():
 
                 distance = get_distance(bin_height, is_real=is_real)
 
-                # If distance is None, it indicates a sensor/wiring issue
                 if distance is None:
                     print(f"Warning: Potential wiring issue detected for bin {bin_id}.")
-                    send_notification(bin_id, "sensor or wiring issue", TOKEN, notification_type="error")
+                    if not notifications_sent[bin_id]['error']:  # Check if error notification was sent
+                        send_notification(bin_id, "sensor or wiring issue", TOKEN, notification_type="error")
+                        notifications_sent[bin_id]['error'] = True  # Mark error notification as sent
                     continue  # Skip further processing for this bin until the issue is resolved
+
+                # Reset error notification when the sensor responds again
+                if notifications_sent[bin_id]['error']:
+                    send_notification(bin_id, "sensor is responding again", TOKEN, notification_type="recovered")
+                    notifications_sent[bin_id]['error'] = False  # Reset error notification flag
+                    notifications_sent[bin_id]['recovered'] = True  # Mark recovery notification as sent
 
                 fill_percentage = calculate_fill_level(distance, bin_height)
                 print(f"Bin {bin_id} fill level: {fill_percentage}%")
 
-                # Only send data if fill percentage changes significantly
+                # Send data to server if fill percentage changes significantly
                 if last_fill_percentage[bin_id] is None or abs(last_fill_percentage[bin_id] - fill_percentage) >= 2:
                     send_data_to_server(bin_id, fill_percentage, TOKEN)
                     last_fill_percentage[bin_id] = fill_percentage
 
                 # Check if the bin is 80% or more filled and send a notification if it hasn't been sent yet
-                if fill_percentage >= 80 and not notifications_sent[bin_id]:
+                if fill_percentage >= 80 and not notifications_sent[bin_id].get('alerted', False):
                     print(f"Alert: Bin {bin_id} has reached {fill_percentage}% of its capacity!")
                     send_notification(bin_id, f"{fill_percentage}% full", TOKEN, notification_type="alert")
-                    notifications_sent[bin_id] = True  # Ensure notification is sent only once
+                    notifications_sent[bin_id]['alerted'] = True  # Ensure alert notification is sent only once
 
-                # Check if the bin is emptied below 80% to reset the notification flag
+                # Reset alert if below 80%
                 if fill_percentage < 80:
-                    notifications_sent[bin_id] = False  # Reset the notification flag
+                    notifications_sent[bin_id]['alerted'] = False  # Reset the alert notification flag
 
             time.sleep(20)  # Adjust the delay as needed
     except KeyboardInterrupt:
