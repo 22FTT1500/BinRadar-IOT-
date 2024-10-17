@@ -19,11 +19,11 @@ GPIO.setup(ECHO_PIN, GPIO.IN)
 # Bin configurations (real bin and dummy bins)
 bins = [
     {"id": 123, "height": 26.0, "is_real": True},  # Real bin with sensor
-    #{"id": 456, "height": 36.0, "is_real": False},  # Dummy bin 1
-    #{"id": 789, "height": 46.0, "is_real": False},  # Dummy bin 2
-    #{"id": 101, "height": 25.0, "is_real": False},  # Dummy bin 3
-    #{"id": 202, "height": 40.0, "is_real": False},  # Dummy bin 4
-    #{"id": 303, "height": 50.0, "is_real": False}   # Dummy bin 5
+    # {"id": 456, "height": 36.0, "is_real": False},  # Dummy bin 1
+    # {"id": 789, "height": 46.0, "is_real": False},  # Dummy bin 2
+    # {"id": 101, "height": 25.0, "is_real": False},  # Dummy bin 3
+    # {"id": 202, "height": 40.0, "is_real": False},  # Dummy bin 4
+    # {"id": 303, "height": 50.0, "is_real": False}   # Dummy bin 5
 ]
 
 # Notification flags for each bin
@@ -32,20 +32,36 @@ last_fill_percentage = {bin_data['id']: None for bin_data in bins}
 
 # Laravel API credentials and URL
 API_URL = "http://binradar-laravel:8000/api"
-TOKEN = os.getenv("API_TOKEN", "BExMFlUC0tm5ork88WaZRECxI0fnsFSoxaUnI5JI674fae11")  # Admin token
+TOKEN = os.getenv("API_TOKEN", "QdZDgsSE38PWY2c22Dg337OvRRLZycrne785Xf5V27de7128")  # Admin token
+
+def get_threshold_from_db(bin_id, token):
+    """Fetches the notification threshold from the database for a specific bin."""
+    url = f"{API_URL}/bins/{bin_id}/threshold"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}"
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json().get('threshold', 80)  # Default to 80 if not found
+        else:
+            print(f"Failed to fetch threshold for bin {bin_id}. Status code: {response.status_code}")
+            return 80  # Fallback value if request fails
+    except requests.RequestException as e:
+        print(f"Error fetching threshold for bin {bin_id}: {e}")
+        return 80  # Fallback value
 
 def get_distance(bin_height, retries=5, is_real=True):
     if is_real:
         for _ in range(retries):
             try:
-                # Send a pulse to the trigger pin
                 GPIO.output(TRIGGER_PIN, GPIO.LOW)
                 time.sleep(0.5)
                 GPIO.output(TRIGGER_PIN, GPIO.HIGH)
                 time.sleep(0.00001)
                 GPIO.output(TRIGGER_PIN, GPIO.LOW)
 
-                # Wait for the echo pin to go high
                 pulse_start = time.time()
                 timeout_start = pulse_start
                 while GPIO.input(ECHO_PIN) == GPIO.LOW:
@@ -57,33 +73,23 @@ def get_distance(bin_height, retries=5, is_real=True):
                 while GPIO.input(ECHO_PIN) == GPIO.HIGH:
                     pulse_end = time.time()
 
-                # Calculate pulse duration
                 pulse_duration = pulse_end - pulse_start
-
-                # Calculate distance in centimeters
                 distance = pulse_duration * 17150
                 distance = round(distance, 2)
 
-                # Validate distance (within a reasonable range for your bin)
                 if 2 < distance < bin_height:
                     return distance
                 time.sleep(0.1)
             except Exception as e:
                 print(f"Error: {e}")
-                return None  # Return None if sensor fails multiple times
-        return bin_height  # Return maximum bin height if sensor fails
+                return None
+        return bin_height
     else:
-        # Simulate distance for dummy bins
         return round(random.uniform(0, bin_height), 2)
 
 def calculate_fill_level(distance, bin_height):
-    # Calculate the filled portion of the bin
     fill_level_cm = bin_height - distance
-
-    # Ensure fill level is within 0 to bin_height
     fill_level_cm = max(0, min(fill_level_cm, bin_height))
-
-    # Calculate fill percentage
     fill_percentage = (fill_level_cm / bin_height) * 100
     return int(fill_percentage)
 
@@ -114,7 +120,7 @@ def send_notification(bin_id, message, token, notification_type):
 
     data = {
         "message": message,
-        "type": notification_type,  # Use "alert" for bin level, "error" for wiring issues
+        "type": notification_type,
         "bin_id": bin_id
     }
     try:
@@ -140,33 +146,32 @@ def main():
 
                 if distance is None:
                     print(f"Warning: Potential wiring issue detected for bin {bin_id}.")
-                    if not notifications_sent[bin_id]['error']:  # Check if error notification was sent
+                    if not notifications_sent[bin_id]['error']:
                         send_notification(bin_id, "sensor or wiring issue", TOKEN, notification_type="error")
-                        notifications_sent[bin_id]['error'] = True  # Mark error notification as sent
-                    continue  # Skip further processing for this bin until the issue is resolved
+                        notifications_sent[bin_id]['error'] = True
+                    continue
 
-                # Reset error notification when the sensor responds again
                 if notifications_sent[bin_id]['error']:
                     send_notification(bin_id, "sensor is responding again", TOKEN, notification_type="recovered")
-                    notifications_sent[bin_id]['error'] = False  # Reset error notification flag
-                    notifications_sent[bin_id]['recovered'] = True  # Mark recovery notification as sent
+                    notifications_sent[bin_id]['error'] = False
+                    notifications_sent[bin_id]['recovered'] = True
 
                 fill_percentage = calculate_fill_level(distance, bin_height)
                 print(f"Bin {bin_id} fill level: {fill_percentage}%")
 
-                # Send data to server if fill percentage changes significantly
                 if last_fill_percentage[bin_id] is None or abs(last_fill_percentage[bin_id] - fill_percentage) >= 2:
                     send_data_to_server(bin_id, fill_percentage, TOKEN)
                     last_fill_percentage[bin_id] = fill_percentage
 
-                # Check if the bin is 80% or more filled and send a notification if it hasn't been sent yet
-                if fill_percentage >= 80 and not notifications_sent[bin_id].get('alerted', False):
+                # Get the threshold from the database for the current bin
+                threshold = get_threshold_from_db(bin_id, TOKEN)
+
+                if fill_percentage >= threshold and not notifications_sent[bin_id].get('alerted', False):
                     print(f"Alert: Bin {bin_id} has reached {fill_percentage}% of its capacity!")
                     send_notification(bin_id, f"{fill_percentage}% full", TOKEN, notification_type="alert")
-                    notifications_sent[bin_id]['alerted'] = True  # Ensure alert notification is sent only once
+                    notifications_sent[bin_id]['alerted'] = True
 
-                # Reset alert if below 80%
-                if fill_percentage < 80:
+                if fill_percentage < threshold:
                     notifications_sent[bin_id]['alerted'] = False  # Reset the alert notification flag
 
             time.sleep(20)  # Adjust the delay as needed
