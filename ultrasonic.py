@@ -19,23 +19,22 @@ GPIO.setup(ECHO_PIN, GPIO.IN)
 # Bin configurations (real bin and dummy bins)
 bins = [
     {"id": 123, "height": 26.0, "is_real": True},  # Real bin with sensor
-    # {"id": 456, "height": 36.0, "is_real": False},  # Dummy bin 1
-    # {"id": 789, "height": 46.0, "is_real": False},  # Dummy bin 2
-    # {"id": 101, "height": 25.0, "is_real": False},  # Dummy bin 3
-    # {"id": 202, "height": 40.0, "is_real": False},  # Dummy bin 4
-    # {"id": 303, "height": 50.0, "is_real": False}   # Dummy bin 5
+    {"id": 456, "height": 36.0, "is_real": False},  # Dummy bin 1
+    {"id": 789, "height": 46.0, "is_real": False},  # Dummy bin 2
+    {"id": 101, "height": 25.0, "is_real": False},  # Dummy bin 3
+    {"id": 202, "height": 40.0, "is_real": False},  # Dummy bin 4
+    {"id": 303, "height": 50.0, "is_real": False}   # Dummy bin 5
 ]
 
 # Notification flags for each bin
-notifications_sent = {bin_data['id']: {'error': False, 'recovered': False} for bin_data in bins}
+notifications_sent = {bin_data['id']: {'error': False, 'recovered': False, 'alerted': False} for bin_data in bins}
 last_fill_percentage = {bin_data['id']: None for bin_data in bins}
 
 # Laravel API credentials and URL
 API_URL = "http://binradar-laravel:8000/api"
-TOKEN = os.getenv("API_TOKEN", "QdZDgsSE38PWY2c22Dg337OvRRLZycrne785Xf5V27de7128")  # Admin token
+TOKEN = os.getenv("API_TOKEN", "WUOArY94LsUNAmzRZQm5MOuMhMhfXA8jPCjTzKgD97808dd8")  # Admin token
 
 def get_threshold_from_db(bin_id, token):
-    """Fetches the notification threshold from the database for a specific bin."""
     url = f"{API_URL}/bins/{bin_id}/threshold"
     headers = {
         "Content-Type": "application/json",
@@ -51,6 +50,23 @@ def get_threshold_from_db(bin_id, token):
     except requests.RequestException as e:
         print(f"Error fetching threshold for bin {bin_id}: {e}")
         return 80  # Fallback value
+
+def get_notification_methods_from_db(bin_id, token):
+    url = f"{API_URL}/bins/{bin_id}/notification-methods"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}"
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json().get('notification_methods', ['email', 'website'])  # Default preferences
+        else:
+            print(f"Failed to fetch notification methods for bin {bin_id}. Status code: {response.status_code}")
+            return ['email', 'website']  # Fallback value
+    except requests.RequestException as e:
+        print(f"Error fetching notification methods for bin {bin_id}: {e}")
+        return ['email', 'website']  # Fallback value
 
 def get_distance(bin_height, retries=5, is_real=True):
     if is_real:
@@ -125,9 +141,8 @@ def send_notification(bin_id, message, token, notification_type):
     }
     try:
         response = requests.post(url, json=data, headers=headers)
-        print(f"Sending {notification_type} notification for bin {bin_id}: {data}")
         if response.status_code == 200:
-            print(f"SUCCESSFUL to send {notification_type} notification for bin {bin_id}.")
+            print(f"Sending notification..")
         else:
             print(f"FAILED to send {notification_type} notification for bin {bin_id}. Status code: {response.status_code}")
             print(f"Response Content: {response.text}")
@@ -147,29 +162,42 @@ def main():
                 if distance is None:
                     print(f"Warning: Potential wiring issue detected for bin {bin_id}.")
                     if not notifications_sent[bin_id]['error']:
-                        send_notification(bin_id, "sensor or wiring issue", TOKEN, notification_type="error")
+                        send_notification(bin_id, "Sensor or wiring issue", TOKEN, notification_type="error")
                         notifications_sent[bin_id]['error'] = True
                     continue
 
                 if notifications_sent[bin_id]['error']:
-                    send_notification(bin_id, "sensor is responding again", TOKEN, notification_type="recovered")
+                    send_notification(bin_id, "Sensor is responding again", TOKEN, notification_type="recovered")
                     notifications_sent[bin_id]['error'] = False
                     notifications_sent[bin_id]['recovered'] = True
 
                 fill_percentage = calculate_fill_level(distance, bin_height)
+                
+                # Print fill level
                 print(f"Bin {bin_id} fill level: {fill_percentage}%")
-
-                if last_fill_percentage[bin_id] is None or abs(last_fill_percentage[bin_id] - fill_percentage) >= 2:
-                    send_data_to_server(bin_id, fill_percentage, TOKEN)
-                    last_fill_percentage[bin_id] = fill_percentage
 
                 # Get the threshold from the database for the current bin
                 threshold = get_threshold_from_db(bin_id, TOKEN)
 
+                # Check if we need to send an alert
                 if fill_percentage >= threshold and not notifications_sent[bin_id].get('alerted', False):
-                    print(f"Alert: Bin {bin_id} has reached {fill_percentage}% of its capacity!")
-                    send_notification(bin_id, f"{fill_percentage}% full", TOKEN, notification_type="alert")
+                    alert_message = f"Alert: Bin {bin_id} has reached {fill_percentage}% of its capacity!"
+                    print(alert_message)  # Print alert message
                     notifications_sent[bin_id]['alerted'] = True
+
+                # Fetch notification methods for the current bin
+                notification_methods = get_notification_methods_from_db(bin_id, TOKEN)
+                print(f"Notification methods for bin {bin_id}: {notification_methods}")
+
+                # If fill percentage is above threshold, send notification
+                if fill_percentage >= threshold:
+                    # Check if 'email' is in the notification methods before sending
+                    if 'email' in notification_methods:
+                        send_notification(bin_id, f"{fill_percentage}% full", TOKEN, notification_type="alert")
+                        print(f"SUCCESSFUL sending email notification for bin {bin_id}.")
+                        
+                    # Always send website notification
+                    print(f"SUCCESSFUL sending website notification for bin {bin_id}.")
 
                 if fill_percentage < threshold:
                     notifications_sent[bin_id]['alerted'] = False  # Reset the alert notification flag
